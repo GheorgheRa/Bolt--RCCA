@@ -1,0 +1,94 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import {
+  buildExportRows,
+  exportHeaders,
+  pdfItemsToRows,
+  rowsToPicklistOptions,
+} from '../src/components/documents/picklistFiles.js';
+
+const PN = 'Part Number vs Alias_Picklist';
+
+test('imports every row of a simple category and skips existing and repeated values', () => {
+  const existing = [{ category: 'department', label: 'Quality', value: 'quality', sort_order: 7 }];
+  const table = [
+    ['Label', 'Value'],
+    ['Quality', ''],
+    ['Producție', ''],
+    ['Logistics', 'LOG'],
+    ['logistics', 'log'],
+    ['', ''],
+  ];
+  const result = rowsToPicklistOptions(table, 'department', existing);
+  assert.deepEqual(result.toCreate.map(o => [o.label, o.value, o.sort_order]), [
+    ['Producție', 'producție', 8],
+    ['Logistics', 'LOG', 9],
+  ]);
+  assert.equal(result.duplicates, 2);
+  assert.equal(result.headerDetected, true);
+});
+
+test('maps Part Number / Alias / Client by header regardless of column order', () => {
+  const table = [
+    ['Client', 'Alias', 'Part Number', 'Active'],
+    ['hw', 'Rotor', 'PN-001', 'Yes'],
+    ['XYZ', '', 'PN-002', 'No'],
+    ['PW', 'Stator', '', ''],
+  ];
+  const result = rowsToPicklistOptions(table, PN, []);
+  assert.deepEqual(result.toCreate.map(o => [o.value, o.label, o.client, o.is_active]), [
+    ['PN-001', 'Rotor', 'HW', true],
+    ['PN-002', '', null, false],
+  ]);
+  assert.equal(result.invalid, 1);
+  assert.equal(result.unknownClients, 1);
+});
+
+test('uses positional columns when there is no header row', () => {
+  const result = rowsToPicklistOptions([['CNC-1', 'SN 123'], ['CNC-2']], 'Utilaj - Serial#_Picklist', []);
+  assert.deepEqual(result.toCreate.map(o => [o.value, o.label, 'client' in o]), [
+    ['CNC-1', 'SN 123', false],
+    ['CNC-2', '', false],
+  ]);
+  assert.equal(result.headerDetected, false);
+});
+
+test('exported rows can be imported back unchanged', () => {
+  const options = [
+    { category: PN, value: 'PN-2', label: 'B', client: 'COL', sort_order: 2, is_active: false },
+    { category: PN, value: 'PN-1', label: 'A', client: null, sort_order: 1, is_active: true },
+  ];
+  const table = [exportHeaders(PN), ...buildExportRows(PN, options)];
+  assert.deepEqual(table[0], ['Part Number', 'Alias', 'Client', 'Active']);
+  const result = rowsToPicklistOptions(table, PN, []);
+  assert.deepEqual(result.toCreate.map(o => [o.value, o.label, o.client, o.is_active]), [
+    ['PN-1', 'A', null, true],
+    ['PN-2', 'B', 'COL', false],
+  ]);
+});
+
+test('groups PDF text items into rows aligned to the header columns', () => {
+  const items = [
+    { str: 'Picklist: Part Number vs Alias', x: 40, y: 800, page: 1 },
+    { str: 'Part Number', x: 40, y: 772, page: 1 },
+    { str: 'Alias', x: 150, y: 772, page: 1 },
+    { str: 'Client', x: 260, y: 772, page: 1 },
+    { str: 'PN-1', x: 40, y: 754, page: 1 },
+    { str: 'HW', x: 260, y: 754.5, page: 1 },
+    { str: 'Rotor', x: 150, y: 754, page: 1 },
+    { str: 'Part Number', x: 40, y: 800, page: 2 },
+    { str: 'Alias', x: 150, y: 800, page: 2 },
+    { str: 'Client', x: 260, y: 800, page: 2 },
+    { str: 'PN-2', x: 40, y: 782, page: 2 },
+  ];
+  assert.deepEqual(pdfItemsToRows(items), [
+    ['Part Number', 'Alias', 'Client'],
+    ['PN-1', 'Rotor', 'HW'],
+    ['PN-2', '', ''],
+  ]);
+});
+
+test('uses the remaining column as label when only a value header is recognised', () => {
+  const result = rowsToPicklistOptions([['Defect', 'Valoare'], ['Sudură', ''], ['Fisură', 'crack']], 'DefectType_Picklist', []);
+  assert.deepEqual(result.toCreate.map(o => [o.label, o.value]), [['Sudură', 'sudură'], ['Fisură', 'crack']]);
+});
